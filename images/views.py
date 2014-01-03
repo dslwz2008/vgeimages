@@ -4,8 +4,8 @@ from django.shortcuts import render
 from django.http import HttpResponse
 from images.models import ResultImages
 from django.core.exceptions import ObjectDoesNotExist
-import json
 import os
+import json
 import os.path
 import sys
 
@@ -27,10 +27,10 @@ def index(request):
 def get_parameter(request):
     if request.method == 'GET':
         todos = ResultImages.objects.filter(status=0)
-        result = {'parameters': []}
-        for todo in todos:
-            result['parameters'].append(todo.paraName)
-        return HttpResponse(json.dumps(result), content_type='application/json')
+        if todos and todos[0]:
+            return HttpResponse('%s:%s' % ('t', todos[0].paraName), content_type='text/plain')
+        else:
+            return HttpResponse('f', content_type='text/plain')
 
 
 # 判断参数是否有效
@@ -63,17 +63,21 @@ def post_parameter(request):
         paras.append(request.POST['wave_scale'])#水波
         if is_paras_valid(paras):
             paras_str = '_'.join(paras)
-            image_dir = DATA_DIR + paras_str
-            if not os.path.exists(image_dir):
-                os.mkdir(image_dir)
-            ri = ResultImages(paraName=paras_str, status=0,
-                              imageDir=image_dir, imageNum=0)
-            ri.save()
-            result = {'status': 'ok'}
-            return HttpResponse(json.dumps(result), content_type='application/json')
+            try:
+                obj = ResultImages.objects.get(paraName=paras_str)
+                return HttpResponse('entry has existed.', content_type='text/plain')
+            except ObjectDoesNotExist:
+                image_dir = DATA_DIR + paras_str
+                if not os.path.exists(image_dir):
+                    os.mkdir(image_dir)
+                ri = ResultImages(paraName=paras_str, status=0,
+                                  imageDir=image_dir, imageNum=0)
+                ri.save()
+                result = 'status:ok'
+                return HttpResponse(result, content_type='text/plain')
         else:
-            result = {'status': 'bad parameter'}
-            return HttpResponse(json.dumps(result), content_type='application/json')
+            result = 'status:bad parameter'
+            return HttpResponse(result, content_type='text/plain')
 
 
 # 上传一张图片，参数为paraname，和第几张图片，
@@ -82,22 +86,39 @@ def post_image(request):
     if request.method == 'POST':
         para_name = request.POST['paraname']
         image_order = request.POST['imageorder']
-        result = {}
+        result = ''
         try:
             obj = ResultImages.objects.get(paraName=para_name)
             target_dir = obj.imageDir
             if request.FILES:
                 fp = request.FILES['upload']
                 save_uploaded_file(fp, target_dir+'/'+image_order+'.jpg')
-                result['status'] = 'ok'
+                obj.imageNum = image_order
+                obj.status = 1
+                obj.save()
+                result += 'status:ok'
             else:
-                result['status'] = 'no image uploaded.'
+                result += 'status:no image uploaded.'
         except ObjectDoesNotExist:
             print('this is object does not exists.')
         except:
             print('some exceptions happened.')
         finally:
-            return HttpResponse(json.dumps(result), content_type='application/json')
+            return HttpResponse(result, content_type='text/plain')
+
+# 图片上传结束后，调用该接口通知服务器
+def post_image_finish(request):
+    if request.method == 'POST':
+        para_name = request.POST['paraname']
+        try:
+            obj= ResultImages.objects.get(paraName=para_name)
+            obj.status = 2
+            obj.save()
+        except:
+            print(sys.exc_info()[0])
+            return HttpResponse("status:error", content_type='text/plain')
+        finally:
+            return HttpResponse("status:ok", content_type='text/plain')
 
 
 # 根据参数名查找图片所在文件夹
@@ -115,13 +136,26 @@ def get_image(request):
                 return HttpResponse(fp, mimetype='image/jpeg')
             else:
                 return HttpResponse(
-                    json.dumps({'status':"Image doesn't exists."}),
-                    content_type='application/json'
+                    "status:Image doesn't exists.",
+                    content_type='text/plain'
                 )
         else:
-            result = {'status':'No such parameter. You must create first.'}
-            return HttpResponse(json.dumps(result),
-                                content_type='application/json')
+            result = 'status:No such parameter. You must create first.'
+            return HttpResponse(result,
+                                content_type='text/plain')
+
+
+#查询当前图片的状态和数量
+def get_image_status(request):
+    if request.method == 'GET':
+        if 'paraname' in request.GET:
+            para_name = request.GET['paraname']
+            try:
+                entry = ResultImages.objects.get(paraName=para_name)
+                return HttpResponse('status:%s;number:%s' % (entry.status, entry.imageNum),
+                                    content_type='text/plain')
+            except ObjectDoesNotExist:
+                return HttpResponse('no new image')
 
 
 # 清空数据库
@@ -129,6 +163,7 @@ def clear_database(request):
     if request.method == 'GET':
         ResultImages.objects.all().delete()
         return HttpResponse("<h1>database cleared!</h1>")
+
 
 #用来测试
 def test(request):
